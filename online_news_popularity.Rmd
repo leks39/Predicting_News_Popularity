@@ -1,0 +1,471 @@
+---
+title: "601 Individual Assignment"
+author: "Olalekan Fagbuyi"
+date: "2023-10-10"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=8)
+```
+
+```{r}
+setwd('C:\\Users\\User\\Desktop\\WLU')
+```
+
+## 1.Business Understanding
+
+This project aims to predict the popularity of online articles using the number of shares as a metric for measuring popularity. Correctly classifying these online articles is important to the company because it implies we will be able to optimize revenue regeneration ($0.75 for the first 1000 shares and $2 after) considering our 12 articles per day limit constraint.
+
+A threshold of 1400 has been set to determine which articles are popular and which are not. Shares Value Range: Number of Instances in Range: < 1400 18490 (46.64%) and >= 1400 21154 (53.35%).
+
+
+## 2. Data Understanding
+The dataset contain 39644 articles with 61 attributes will be analyzed and then used to build a machine model for making predictions.
+
+Dataset Breakdown: 61 attributes (58 predictive attributes, 2 non-predictive, 1 goal field)
+
+
+### 2.1 Importing Libraries and Loading Dataset
+```{r}
+#importing library
+library(caret)
+library(tidyverse)
+library(randomForest)
+library(corrplot)
+library(rpart)
+library(kernlab)
+library(pROC)
+library(gridExtra)
+```
+
+```{r}
+#loading dataset
+articles <- read.csv("OnlineNewsPopularity.csv")
+head(articles)
+```
+
+```{r pressure, echo=FALSE}
+str(articles)
+```
+
+### 2.2 Determining Popularity Threshold
+In order to predict popularity of articles, an average threshold will be determined from the shares column.
+
+The mean would be used if the column is normally distributed with no outliers. However, if there are outliers, the median of the column will be picked as this measure is less sensitive to extreme values.
+
+```{r}
+# Create a box plot for a specific column
+boxplot(articles$shares, main = "Box Plot of Shares",
+        ylab = "shares")
+
+```
+
+```{r}
+#No of outliers in the shares column
+outliers <- boxplot.stats(articles$shares)$out
+length(outliers)
+```
+The shares column has a considerable amount of outliers (4541 or 11.45% of total data points). The median will be used as an average instead of the mean on this occasion.
+
+```{r}
+median(articles$shares)
+```
+
+### 2.3 Creating popularity column based on Threshold
+
+```{r}
+articles$popular <- ifelse(articles$shares >= 1400, 1, 0)
+
+#Dropping shares column
+articles1 <- subset( articles, select = -c(shares) )
+```
+
+
+## 3 Data Visualization
+Getting a better understanding of the dataset via visualizations
+
+
+### 3.1 Popularity Distribution
+```{r}
+ggplot(articles1, aes(x = popular)) +
+geom_bar() +
+geom_text(stat='count', aes(label=..count..), vjust=-1)
+```
+
+### 3.2 - Univariate Analysis - num columns
+```{r}
+p1 <- ggplot(articles1) + geom_histogram(aes(n_tokens_content),binwidth = 1000, fill ="purple",col ="black")
+p2 <- ggplot(articles1) + geom_histogram(aes(n_tokens_title), binwidth =5, fill ="purple",col ="black")
+p3 <- ggplot(articles1) + geom_histogram(aes(num_hrefs), binwidth = 100, fill ="purple",col ="black")
+p4 <- ggplot(articles1) + geom_histogram(aes(num_keywords ), binwidth =5, fill ="purple",col ="black")
+p5 <- ggplot(articles1) + geom_histogram(aes(num_self_hrefs), binwidth = 10, fill ="purple",col ="black")
+p6 <- ggplot(articles1) + geom_histogram (aes(num_imgs), binwidth = 10, fill ="purple",col ="black")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, nrow =2, ncol =3)
+```
+
+### 3.3 Bivariate Analysis - Checking effect of days and news type on shares
+```{r}
+#Taking log of shares column to rescale column for visualizations
+
+articles$logshares=log(articles$shares)
+```
+
+
+```{r}
+#Checking if publishing days make a difference
+articles$news_day[articles$weekday_is_monday==1] <- "Monday"
+articles$news_day[articles$weekday_is_tuesday==1] <- "Tuesday"
+articles$news_day[articles$weekday_is_wednesday==1] <- "Wednesday"
+articles$news_day[articles$weekday_is_thursday==1] <- "Thursday"
+articles$news_day[articles$weekday_is_friday==1] <- "Friday"
+articles$news_day[articles$weekday_is_saturday==1] <- "Saturday"
+articles$news_day[articles$weekday_is_sunday==1] <- "Sunday"
+#Check 
+p1 <- ggplot(articles, aes(as.factor(news_day), logshares))
+p1 + geom_boxplot()
+```
+
+```{r}
+#Checking if publishing topics make a difference
+articles$news_type[articles$data_channel_is_lifestyle==1] <- "Lifestyle"
+articles$news_type[articles$data_channel_is_entertainment==1] <- "Entertainment"
+articles$news_type[articles$ data_channel_is_bus==1] <- "Business"
+articles$news_type[articles$data_channel_is_socmed==1] <- "Social_Media"
+articles$news_type[articles$data_channel_is_tech==1] <- "Technology"
+articles$news_type[articles$data_channel_is_world==1] <- "World"
+
+p2 <- ggplot(articles, aes(as.factor(news_type), logshares))
+p2 + geom_boxplot()
+```
+
+
+
+
+## 4. Data Preparation
+
+### 4.1 Checking for missing values and duplicates
+```{r}
+#missing values check
+sapply(articles1,function(x) sum(is.na(x)))
+```
+
+```{r}
+#duplicates check
+articles1[duplicated(articles1)]
+
+```
+
+
+
+### 4.2 Dropping redundant features
+
+```{r}
+#removing all day leaving only is_weekend to avoid repetition
+articles2 <- subset( articles1, select = -c(weekday_is_monday, weekday_is_tuesday, weekday_is_wednesday,
+                                            weekday_is_thursday, weekday_is_friday, weekday_is_saturday,
+                                            weekday_is_sunday) )
+```
+
+
+```{r}
+#removing other non_informative features
+articles3 <- subset( articles2, select = -c(url, timedelta ) )
+```
+
+### 4.3 Checking for and removing highly correlated features 
+
+```{r, fig.width = 10.5}
+Cor <- round(cor(articles3),2)
+
+corrplot(Cor, type="lower",method ="color", title = "Correlation Plot", 
+         mar=c(0,1,1,1), tl.cex= 0.65, outline= T, tl.col= rgb(0, 0, 0))
+```
+
+```{r}
+#Setting correlation cutoff
+highlyCorrelated <- findCorrelation(Cor, cutoff = 0.7)
+highlyCorCol <- colnames(articles2)[highlyCorrelated]
+highlyCorCol
+
+```
+```{r}
+#removing multicollinear variables
+articles3 <- articles3[, -which(colnames(articles2) %in% highlyCorCol)]
+dim(articles3)
+```
+
+
+## 5 Modelling
+3 Models will be used to evaluate this classification task. First the dataset will be split into Training and Test set
+
+```{r}
+#To achieve reproducible model; set the random seed number
+set.seed(100)
+
+# Data is split into training and test set in a 80:20 ratio
+TrainingIndex <- createDataPartition(articles3$popular, p=0.75, list = FALSE)
+
+TrainingSet <- articles3[TrainingIndex,]# Training Set
+TestingSet <- articles3[-TrainingIndex,]# Test Set
+```
+
+
+### 5.1 Logistic Regression
+```{r}
+model1 <- glm(popular~.,family=binomial(link='logit'),data = TrainingSet, maxit = 1000 )
+summary(model1)
+```
+```{r}
+#calculating errors 
+#test error
+cut <- 0.5
+
+yhat = (predict(model1,TrainingSet,type="response")>cut)
+tr.err = mean(TrainingSet$popular != yhat) 
+tr.err
+```
+```{r}
+# calculate the testing error in a similar manner to the training error
+yhat = (predict(model1,TestingSet,type="response")>cut)
+te.err = mean(TestingSet$popular != yhat) 
+print(te.err)
+#print(predict(cls,test,type="response")>cut)
+```
+```{r}
+# calculation of Naive predictor error rate where cut = 1
+
+# so the Naive predictor will simply predict all customers stay...
+# so it will make errors on each customer that leaves the bank
+
+trN.err <- mean(!TrainingSet$popular)
+teN.err <- mean(!TestingSet$popular)
+
+print(paste("Naive train error",trN.err))
+print(paste("Naive test error",teN.err))
+hist(predict(model1,TestingSet,type="response"))
+```
+
+```{r}
+# Prediction on TestingSet using Logistic Regression
+prediction <- predict(model1, TestingSet, type ="response")
+head(prediction)
+```
+```{r}
+#Assigning probabilities - If prediction exceeds threshold of 0.5, 1 else 0
+prediction <- ifelse(prediction >0.5,1,0)
+head(prediction)
+```
+```{r}
+#Computing confusion matrix values
+confusionMatrix(factor(TestingSet$popular),factor(prediction), mode ='everything', positive ="0")
+```
+
+### 5.2 Decision Trees
+3 cp partitions 0.01, 0.001 and 0.00001 will be used for prediction.
+
+
+#### 5.2.1 Tree 1 cp = 0.01
+```{r}
+tree1 <- rpart(popular~., method = 'class', data = TrainingSet, control = rpart.control(cp = 0.01))
+```
+
+```{r}
+#using tree1 for predicting test set
+test_prediction1 <-predict(tree1, TestingSet, type = 'class')
+head(test_prediction1)
+```
+```{r}
+# converting TestingSet$popular to factor
+popular_factor <-  as.factor(TestingSet$popular)
+
+#confusion matrix for tree1
+cfm1 <- confusionMatrix(test_prediction1, popular_factor)
+cfm1
+```
+
+```{r}
+#error rate for tree1
+error_rate1 <- 1 - cfm1$overall["Accuracy"]
+error_rate1
+```
+#### 5.2.2 Tree 2 cp = 0.001
+```{r}
+tree2 <- rpart(popular~., method = 'class', data = TrainingSet, control = rpart.control(cp = 0.001))
+```
+
+```{r}
+#using tree2 for predicting test set
+test_prediction2 <-predict(tree2, TestingSet, type = 'class')
+head(test_prediction2)
+```
+
+```{r}
+#confusion matrix for tree1
+cfm2 <- confusionMatrix(test_prediction2, popular_factor)
+cfm2
+```
+```{r}
+#error rate for tree1
+error_rate1 <- 1 - cfm2$overall["Accuracy"]
+error_rate1
+```
+#### 5.2.3 Tree 3, cp = 0.00001
+
+```{r}
+tree3 <- rpart(popular~., method = 'class', data = TrainingSet, control = rpart.control(cp = 0.00001))
+```
+
+```{r}
+#using tree1 for predicting test set
+test_prediction3 <-predict(tree3, TestingSet, type = 'class')
+head(test_prediction3)
+```
+
+```{r}
+#confusion matrix for tree1
+cfm3 <- confusionMatrix(test_prediction3, popular_factor)
+cfm3
+```
+
+```{r}
+#error rate for tree1
+error_rate3 <- 1 - cfm3$overall["Accuracy"]
+error_rate3
+```
+### 5.3 Model 3 - Random Forest
+
+```{r}
+#First step in running rf is converting target variable to factor
+TrainingSet$popular <- as.factor(TrainingSet$popular)
+```
+
+### 5.3.1 - Random Forest ntree = 100
+```{r}
+# Assuming your data frame is called 'df' and the target variable is 'target'
+rf_model <- randomForest(popular~ ., data = TrainingSet, ntree = 100)
+rf_model
+```
+```{r}
+rf_predictions <- predict(rf_model, TestingSet)
+head(rf_predictions)
+```
+
+```{r}
+#confusion matrix for rf_model
+cf_rf <- confusionMatrix(rf_predictions, popular_factor)
+cf_rf
+```
+```{r}
+#error rate for tree1
+rf_error_rate <- 1 - cf_rf$overall["Accuracy"]
+rf_error_rate
+```
+
+### 5.3.2 Random Forest ntree = 500
+```{r}
+rf_model2 <- randomForest(popular~ ., data = TrainingSet, ntree = 500, importance = TRUE)
+rf_model2
+```
+
+
+```{r}
+rf2_predictions <- predict(rf_model2, TestingSet)
+head(rf2_predictions)
+```
+```{r}
+#confusion matrix for rf_model2
+cf_rf2 <- confusionMatrix(rf2_predictions, popular_factor)
+cf_rf2
+```
+```{r}
+#error rate for rf2
+rf2_error_rate <- 1 - cf_rf2$overall["Accuracy"]
+rf2_error_rate
+```
+
+### 5.4 Calculating Feature Importance using Random Forest
+```{r}
+importance_values <- importance(rf_model2)
+importance_values
+```
+
+
+```{r, fig.width = 9.0 }
+varImpPlot(rf_model2)
+
+```
+
+
+
+## 6 Model Evaluation
+
+Models are  evaluated using accuracy from confusion matrix, testing error and also AUC score.
+
+### 6.1 Table of Results
+```{r}
+# Create a new table with some sample data
+Model_Comparison <- data.frame(
+  Model = c("Logistic Regression", "Decison Trees", "Random Forest"),
+  Accuracy = c(0.644, 0.645, 0.668),
+  TestingError = c(0.356, 0.355, 0.332),
+  Sensitivity = c(0.625, 0.585, 0.595),
+  Specificity = c(0.659, 0.702, 0.732))
+
+# Display the new table
+print(Model_Comparison)
+```
+
+###6.2 Plotting ROC Curves
+
+```{r}
+#converting prediction scores data type before plotting curves
+test_prediction2 <- as.numeric(test_prediction2)
+rf2_predictions <- as.numeric(rf2_predictions)
+```
+
+
+```{r}
+#creating the ROC function
+glm_roc_curve <- roc(TestingSet$popular, prediction)
+tree_roc_curve <- roc(TestingSet$popular, test_prediction2)
+rf_roc_curve <- roc(TestingSet$popular, rf2_predictions)
+
+```
+
+```{r}
+# Plotting ROC Curves
+plot(glm_roc_curve, col = "blue", print.auc = TRUE)
+plot(tree_roc_curve, col = "red", add = TRUE)
+plot(rf_roc_curve, col = "yellow", add = TRUE)
+
+```
+
+
+```{r}
+#calculating AUC curves of models# Calculate ROC and AUC using pROC
+glm_score <- print(paste('glm roc_roc_curve score is',auc(glm_roc_curve)))
+tree_score <- print(paste('tree_roc_curve score is',auc(tree_roc_curve)))
+rf2_score <- print(paste('rf_roc_curve score is', auc(rf_roc_curve)))
+```
+
+Proceeding with Random Forest because it has the highest accuracy (0.67), lowest testing error (0.33) and highest ROC score of 0.663
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
